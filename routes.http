@@ -1,0 +1,34 @@
+### Ledger Service - REST API Routes
+
+@baseUrl = http://localhost:3000
+
+### 1. POST - Create a new ledger transaction
+### Description: Posts a balanced ledger transaction with double-entry accounting
+### Rules:
+###   - Entries must be balanced (sum of amounts = 0)
+###   - All entries must use the same currency
+###   - Returns 204 No Content on success
+POST {{baseUrl}}/ledger/transactions
+Content-Type: application/json
+
+{
+  "description": "Transfer from Account A to Account B",
+  "externalReference": "EXT-REF-001",
+  "entries": [
+    {
+      "accountId": "acct-client-001",
+      "amount": -10000,
+      "currency": "USD"
+    },
+    {
+      "accountId": "acct-pending-settlement",
+      "amount": 10000,
+      "currency": "USD"
+    }
+  ]
+}
+
+### 2. GET - List all ledger transactions
+### Description: Retrieves all saved transactions with their entries
+### Returns: Array of transactions (empty array if none exist)
+GET {{baseUrl}}/ledger/transactions
