@@ -7,6 +7,8 @@ import { MerchantsModule } from './merchants/merchants.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { VaultModule } from './vault/vault.module';
 import { SettlementModule } from './settlement/settlement.module';
+import { PaymentsModule } from './payments/payments.module';
+import { SimulatorModule } from './simulator/simulator.module';
 import { DatabaseModule } from './shared/database/database.module';
 import { DomainErrorFilter } from './shared/http/domain-error.filter';
 import { AppController } from './app.controller';
@@ -21,6 +23,9 @@ import { AppService } from './app.service';
     WebhooksModule,
     VaultModule,
     SettlementModule,
+    PaymentsModule,
+    // the simulated outside world (ADR 0001); development and tests only
+    ...(process.env.SIMULATORS_ENABLED === 'true' ? [SimulatorModule] : []),
   ],
   controllers: [AppController],
   providers: [
