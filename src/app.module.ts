@@ -1,11 +1,31 @@
-import { Module } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
+import { APP_FILTER, APP_PIPE } from '@nestjs/core';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { dataSourceOptions } from './database/data-source';
 import { LedgerModule } from './ledger/ledger.module';
+import { DatabaseModule } from './shared/database/database.module';
+import { DomainErrorFilter } from './shared/http/domain-error.filter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 @Module({
-  imports: [LedgerModule],
+  imports: [
+    TypeOrmModule.forRoot(dataSourceOptions),
+    DatabaseModule,
+    LedgerModule,
+  ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    { provide: APP_FILTER, useClass: DomainErrorFilter },
+  ],
 })
 export class AppModule {}

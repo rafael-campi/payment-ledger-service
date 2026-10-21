@@ -1,9 +1,10 @@
-export type Currency = string;
+export type Currency = string; // ISO 4217, e.g. "BRL"
 
 export enum AccountType {
   ASSET = 'ASSET',
   LIABILITY = 'LIABILITY',
   REVENUE = 'REVENUE',
+  EXPENSE = 'EXPENSE',
 }
 
 export class Account {
