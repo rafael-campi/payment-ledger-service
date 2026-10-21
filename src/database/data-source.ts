@@ -15,6 +15,10 @@ import {
   WebhookEndpointRecord,
 } from '../webhooks/infrastructure/persistence/typeorm/webhook.records';
 import { VaultCardRecord } from '../vault/infrastructure/persistence/typeorm/vault.records';
+import {
+  PayoutRecord,
+  ReceivableRecord,
+} from '../settlement/infrastructure/persistence/typeorm/settlement.records';
 import { CreateLedger1761004800000 } from './migrations/1761004800000-create-ledger';
 import { CreateIdempotencyKeys1761004800001 } from './migrations/1761004800001-create-idempotency-keys';
 import { CreateLedgerAccounts1761091200000 } from './migrations/1761091200000-create-ledger-accounts';
@@ -37,6 +41,8 @@ export const dataSourceOptions: DataSourceOptions = {
     WebhookEndpointRecord,
     EventRecord,
     VaultCardRecord,
+    ReceivableRecord,
+    PayoutRecord,
   ],
   // listed explicitly so the same list works from ts-node, jest and dist/
   migrations: [
