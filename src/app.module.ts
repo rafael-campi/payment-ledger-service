@@ -3,6 +3,7 @@ import { APP_FILTER, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { dataSourceOptions } from './database/data-source';
 import { LedgerModule } from './ledger/ledger.module';
+import { MerchantsModule } from './merchants/merchants.module';
 import { DatabaseModule } from './shared/database/database.module';
 import { DomainErrorFilter } from './shared/http/domain-error.filter';
 import { AppController } from './app.controller';
@@ -13,6 +14,7 @@ import { AppService } from './app.service';
     TypeOrmModule.forRoot(dataSourceOptions),
     DatabaseModule,
     LedgerModule,
+    MerchantsModule,
   ],
   controllers: [AppController],
   providers: [
