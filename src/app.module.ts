@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { dataSourceOptions } from './database/data-source';
 import { LedgerModule } from './ledger/ledger.module';
 import { MerchantsModule } from './merchants/merchants.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 import { DatabaseModule } from './shared/database/database.module';
 import { DomainErrorFilter } from './shared/http/domain-error.filter';
 import { AppController } from './app.controller';
@@ -15,6 +16,7 @@ import { AppService } from './app.service';
     DatabaseModule,
     LedgerModule,
     MerchantsModule,
+    WebhooksModule,
   ],
   controllers: [AppController],
   providers: [
