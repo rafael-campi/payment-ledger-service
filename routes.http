@@ -1,34 +1,366 @@
-### Ledger Service - REST API Routes
+### Payment Ledger Service (PSP) - REST API Routes
+###
+### Authentication
+###   - /platform/* and /ledger/*: operator token (PLATFORM_ADMIN_TOKEN in .env)
+###   - /v1/*: merchant secret key (sk_test_...), returned once by onboarding
+### Idempotency (ADR 0004): every POST and DELETE requires Idempotency-Key.
+###   Same key + same body replays the stored response (header Idempotent-Replayed: true);
+###   same key + different body -> 422; request still running -> 409.
+###   Keys are scoped per caller and remembered for 24 hours.
 
-@baseUrl = http://localhost:3000
+@baseUrl = http://localhost:3001
+@platformToken = dev-platform-token-troque-em-producao
+# paste the values returned by "Onboard a merchant"
+@merchantId = mch_replace_me
+@secretKey = sk_test_replace_me
+@apiKeyId = key_replace_me
+@paymentId = pay_replace_me
+@txid = replace_with_pix_txid
+@webhookEndpointId = we_replace_me
+@publishableKey = pk_test_replace_me
+@cardToken = tok_replace_me
+@refundId = re_replace_me
+@payoutId = po_replace_me
+@eventId = evt_replace_me
 
-### 1. POST - Create a new ledger transaction
-### Description: Posts a balanced ledger transaction with double-entry accounting
-### Rules:
-###   - Entries must be balanced (sum of amounts = 0)
-###   - All entries must use the same currency
-###   - Returns 204 No Content on success
-POST {{baseUrl}}/ledger/transactions
+### ============================ PLATFORM ============================
+
+### 1. POST - Onboard a merchant
+### Optional "pixFeeBps" and "cardFeeBps": MDRs in basis points (defaults 99 = 0.99%
+### on Pix, 299 = 2.99% on credit card).
+### Creates the merchant, its ledger accounts (merchant:<id>:pending and
+### merchant:<id>:available, BRL) and a secret + publishable key, atomically.
+### Returns: 201 with the keys in plaintext. This is the only time they are shown:
+### an idempotent replay returns them masked.
+POST {{baseUrl}}/platform/merchants
+Authorization: Bearer {{platformToken}}
 Content-Type: application/json
+Idempotency-Key: onboard-loja-prateleira-1
 
 {
-  "description": "Transfer from Account A to Account B",
-  "externalReference": "EXT-REF-001",
+  "name": "Loja Prateleira"
+}
+
+### 2. GET - Get a merchant
+### Errors: 404 merchants.not_found
+GET {{baseUrl}}/platform/merchants/{{merchantId}}
+Authorization: Bearer {{platformToken}}
+
+### 2b. GET - Reconciliation report
+### Cross-checks ledger, payments, refunds, payouts and the receivables schedule.
+### Returns: { ok, checks: [{ name, ok, discrepancies }] }; a job runs it every
+### RECONCILIATION_INTERVAL_MS and logs failed checks.
+GET {{baseUrl}}/platform/reconciliation
+Authorization: Bearer {{platformToken}}
+
+### 2c. GET - Pix in suspense (received, but matching no payable charge)
+### status: open | returning | returned | return_failed
+GET {{baseUrl}}/platform/suspense
+Authorization: Bearer {{platformToken}}
+
+### 2d. POST - Return a Pix in suspense to its payer (devolução)
+### Errors: 404 suspense.not_found | 422 suspense.already_handled
+POST {{baseUrl}}/platform/suspense/E99999999202610211200abcdefghijk/return
+Authorization: Bearer {{platformToken}}
+Idempotency-Key: suspense-return-1
+
+### ============================= LEDGER =============================
+
+### 3. POST - Post a manual adjustment to the ledger
+### Operators only. Sources used by the PSP's own flows (pix, card, refund,
+### payout, settlement, suspense-return) and merchant pending accounts are
+### refused (422 ledger.reserved_source / ledger.pending_is_scheduled), so
+### reconciliation can always explain where money came from.
+### Rules:
+###   - Amounts are integers in cents; positive = debit, negative = credit
+###   - At least two entries, none zero, all in the same currency, summing to 0
+###   - Every account must exist and hold the entry's currency
+###   - (source, externalReference) is unique: posting it again returns the existing
+###     transaction; posting it with different content -> 409
+### Returns: 201 Created with the transaction
+### Errors: 400 invalid body | 401 | 409 reference conflict | 422 business rule violated
+POST {{baseUrl}}/ledger/transactions
+Authorization: Bearer {{platformToken}}
+Content-Type: application/json
+Idempotency-Key: 6f1c2a9e-0d4b-4c39-9a57-1f0e8a3b2c10
+
+{
+  "description": "Goodwill credit for a delayed payout",
+  "source": "manual",
+  "externalReference": "ticket-1234",
   "entries": [
     {
-      "accountId": "acct-client-001",
-      "amount": -10000,
-      "currency": "USD"
+      "accountId": "rail-costs",
+      "amount": 500,
+      "currency": "BRL"
     },
     {
-      "accountId": "acct-pending-settlement",
-      "amount": 10000,
-      "currency": "USD"
+      "accountId": "merchant:{{merchantId}}:available",
+      "amount": -500,
+      "currency": "BRL"
     }
   ]
 }
 
-### 2. GET - List all ledger transactions
-### Description: Retrieves all saved transactions with their entries
-### Returns: Array of transactions (empty array if none exist)
+### 4. GET - List all ledger transactions
+### Returns: Array of transactions with their entries, oldest first
 GET {{baseUrl}}/ledger/transactions
+Authorization: Bearer {{platformToken}}
+
+### 5. GET - List accounts with their balances
+### Returns: Array of { id, type, currency, balance }; balance is the debit-positive
+### sum of the account's entries, derived on every call. All balances sum to 0.
+GET {{baseUrl}}/ledger/accounts
+Authorization: Bearer {{platformToken}}
+
+### ======================= MERCHANT API (/v1) =======================
+
+### 6. GET - The authenticated merchant
+### Errors: 401 missing/invalid/revoked key | 403 publishable key
+GET {{baseUrl}}/v1/account
+Authorization: Bearer {{secretKey}}
+
+### 7. GET - Balance owed to the merchant
+### Returns: { available: [{ amount, currency }], pending: [{ amount, currency }] },
+### amounts in cents, derived from the ledger.
+GET {{baseUrl}}/v1/balance
+Authorization: Bearer {{secretKey}}
+
+### 8. GET - List API keys (masked: "sk_test_…a1b2")
+GET {{baseUrl}}/v1/api_keys
+Authorization: Bearer {{secretKey}}
+
+### 9. POST - Create an API key ("secret" or "publishable")
+### Returns: 201 with the key in plaintext, shown only this once.
+POST {{baseUrl}}/v1/api_keys
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: create-key-1
+
+{
+  "type": "secret"
+}
+
+### 10. DELETE - Revoke an API key
+### Idempotent: revoking a revoked key returns it unchanged.
+### Errors: 404 merchants.api_key_not_found | 422 merchants.last_secret_key
+DELETE {{baseUrl}}/v1/api_keys/{{apiKeyId}}
+Authorization: Bearer {{secretKey}}
+Idempotency-Key: revoke-key-1
+
+### ============================ PAYMENTS ============================
+
+### 11. POST - Create a Pix payment
+### amount in cents (1 to 1_000_000_000); currency "BRL"; method "pix".
+### Optional: description (<= 255), metadata (<= 20 string values),
+### expiresInSeconds (60 to 86400, default 3600).
+### Returns: 201 with status "pending", the fee and net amount, and
+### pix.copiaECola (BR Code) for the payer. Emits payment.pending.
+### Errors: 400 invalid body | 422 payments.unsupported_currency, payments.invalid_metadata
+POST {{baseUrl}}/v1/payments
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: cart-42-attempt-1
+
+{
+  "amount": 12345,
+  "currency": "BRL",
+  "method": "pix",
+  "description": "Pedido 42",
+  "metadata": { "cartId": "42" }
+}
+
+### 12. GET - List payments, newest first (?limit=1..100, default 20)
+GET {{baseUrl}}/v1/payments?limit=20
+Authorization: Bearer {{secretKey}}
+
+### 13. GET - Get a payment
+### Errors: 404 payments.not_found
+GET {{baseUrl}}/v1/payments/{{paymentId}}
+Authorization: Bearer {{secretKey}}
+
+### 14. POST - Cancel a pending payment (or an uncaptured card authorization)
+### Idempotent: canceling a canceled payment returns it unchanged. A card
+### authorization is voided at the acquirer. Emits payment.canceled.
+### Errors: 404 payments.not_found | 422 payments.not_cancelable
+POST {{baseUrl}}/v1/payments/{{paymentId}}/cancel
+Authorization: Bearer {{secretKey}}
+Idempotency-Key: cancel-1
+
+### ============================== CARDS ==============================
+### Test cards (simulated acquirer, ADR 0001):
+###   4242 4242 4242 4242 approved (Visa)   5555 5555 5555 4444 approved (Mastercard)
+###   4000 0000 0000 0002 card_declined     4000 0000 0000 9995 insufficient_funds
+###   4000 0000 0000 0069 expired_card      4000 0000 0000 0119 processing_error
+### Any future expiry and any 3-digit CVC (4 digits for Amex).
+
+### 21. POST - Tokenize a card (from the payer's browser)
+### Uses the PUBLISHABLE key. No Idempotency-Key on purpose (ADR 0005).
+### Returns: 201 { id: "tok_...", card: { brand, last4, expMonth, expYear }, expiresAt }.
+### The token is single use and valid for 15 minutes.
+### Errors: 400 malformed | 422 vault.invalid_number, vault.expired_card,
+###   vault.invalid_cvc, vault.unsupported_brand
+POST {{baseUrl}}/v1/tokens
+Authorization: Bearer {{publishableKey}}
+Content-Type: application/json
+
+{
+  "card": {
+    "number": "4242 4242 4242 4242",
+    "expMonth": 12,
+    "expYear": 2030,
+    "cvc": "123",
+    "holderName": "Marcos Teixeira"
+  }
+}
+
+### 22. POST - Pay with a card
+### Authorizes and captures before answering. "capture": false only authorizes
+### (status "authorized"; capture within 7 days). "installments": 1 to 12.
+### Returns: 201 with status "succeeded", "authorized", "failed" (with
+### failure.code: card_declined, insufficient_funds, expired_card,
+### processing_error) or, if the acquirer did not answer, "pending" (the
+### outcome follows by webhook).
+### Errors: 404 vault.token_not_found | 409 vault.token_used |
+###   422 vault.token_expired, payments.card_mismatch
+POST {{baseUrl}}/v1/payments
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: cart-42-attempt-2
+
+{
+  "amount": 12345,
+  "currency": "BRL",
+  "method": "credit_card",
+  "card": { "token": "{{cardToken}}", "installments": 3 },
+  "metadata": { "cartId": "42" }
+}
+
+### 23. POST - Capture an authorized card payment
+### Idempotent. Moves the money in the ledger. Emits payment.succeeded.
+### Errors: 404 payments.not_found | 422 payments.not_capturable
+POST {{baseUrl}}/v1/payments/{{paymentId}}/capture
+Authorization: Bearer {{secretKey}}
+Idempotency-Key: capture-1
+
+### ===================== REFUNDS, RECEIVABLES, PAYOUTS =====================
+### ADR 0006. Outgoing money is recorded before the rail is called and
+### compensated (never deleted) if the rail refuses.
+
+### 24. POST - Refund a payment (all or part)
+### The PSP keeps its fee: the merchant returns the full amount, first from the
+### payment's unreleased receivables, then from the available balance (which
+### may go negative). Full refund → payment status "refunded".
+### Returns: 201 with status "succeeded", "failed" (failureCode) or "pending"
+### (the rail did not answer; the outcome follows by webhook).
+### Errors: 404 payments.not_found | 422 refunds.payment_not_refundable,
+###   refunds.amount_not_refundable
+POST {{baseUrl}}/v1/refunds
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: refund-order-42
+
+{
+  "payment": "{{paymentId}}",
+  "amount": 5000,
+  "reason": "Cliente desistiu de um item"
+}
+
+### 25. GET - List refunds, newest first (?payment=pay_...&limit=1..100)
+GET {{baseUrl}}/v1/refunds?payment={{paymentId}}
+Authorization: Bearer {{secretKey}}
+
+### 26. GET - Get a refund
+GET {{baseUrl}}/v1/refunds/{{refundId}}
+Authorization: Bearer {{secretKey}}
+
+### 27. GET - Receivables schedule ("agenda de recebíveis"), soonest first
+### ?released=false: still to come; ?released=true: already available.
+### Pix: D+0. Card: D+30 per installment.
+GET {{baseUrl}}/v1/receivables?released=false
+Authorization: Bearer {{secretKey}}
+
+### 28. PATCH - Set the payout Pix key
+### CPF, CNPJ (check digits validated), e-mail, +55 phone or random key (EVP).
+### In the simulator, "naoexiste@pix.example" makes payouts fail.
+### Errors: 422 settlement.invalid_pix_key
+PATCH {{baseUrl}}/v1/account
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: payout-key-1
+
+{
+  "payoutPixKey": "529.982.247-25"
+}
+
+### 29. POST - Pay out the available balance by Pix
+### "amount" in cents (optional: defaults to everything available; minimum 100).
+### Returns: 201 with status "paid", "failed" (failureCode, money back to the
+### balance) or "pending".
+### Errors: 422 settlement.no_payout_key, settlement.insufficient_balance,
+###   settlement.amount_too_small
+POST {{baseUrl}}/v1/payouts
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: payout-2026-10-21
+
+{}
+
+### 30. GET - List payouts, newest first
+GET {{baseUrl}}/v1/payouts
+Authorization: Bearer {{secretKey}}
+
+### 31. GET - Get a payout
+GET {{baseUrl}}/v1/payouts/{{payoutId}}
+Authorization: Bearer {{secretKey}}
+
+### ============================ WEBHOOKS ============================
+### Deliveries: POST <url> with the event as JSON and the header
+###   PSP-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>
+### Retried with backoff (30s, 2m, 10m, 30m, 1h, 3h, 6h, 12h) until a 2xx answer.
+### Deduplicate on the event id: delivery is at least once.
+
+### 15. POST - Register a webhook endpoint
+### Returns: 201 with the signing secret (whsec_...) in full, only this once.
+POST {{baseUrl}}/v1/webhook_endpoints
+Authorization: Bearer {{secretKey}}
+Content-Type: application/json
+Idempotency-Key: webhook-endpoint-1
+
+{
+  "url": "http://localhost:3000/webhooks/payments"
+}
+
+### 16. GET - List webhook endpoints (secrets masked)
+GET {{baseUrl}}/v1/webhook_endpoints
+Authorization: Bearer {{secretKey}}
+
+### 17. DELETE - Disable a webhook endpoint
+### Idempotent. Pending deliveries to it are no longer sent.
+DELETE {{baseUrl}}/v1/webhook_endpoints/{{webhookEndpointId}}
+Authorization: Bearer {{secretKey}}
+Idempotency-Key: disable-endpoint-1
+
+### 18. GET - List events, newest first (?type=payment.succeeded&limit=1..100)
+### For reconciling what a webhook endpoint may have missed.
+GET {{baseUrl}}/v1/events?type=payment.succeeded&limit=20
+Authorization: Bearer {{secretKey}}
+
+### 19. GET - Get an event
+### Errors: 404 webhooks.event_not_found
+GET {{baseUrl}}/v1/events/{{eventId}}
+Authorization: Bearer {{secretKey}}
+
+### =================== SIMULATOR (SIMULATORS_ENABLED) ===================
+### Plays the payer and their bank (ADR 0001). No authentication; never
+### enabled in production.
+
+### 20. POST - Pay a Pix charge
+### Optional "amount" (cents) to simulate a wrong amount: the money lands in the
+### suspense account and the payment stays pending.
+### Returns: 200 { endToEndId, outcome: "succeeded" | "unmatched" }
+### Errors: 404 simulator.charge_not_found | 422 simulator.charge_not_payable
+POST {{baseUrl}}/simulator/pix/{{txid}}/pay
+Content-Type: application/json
+
+{}

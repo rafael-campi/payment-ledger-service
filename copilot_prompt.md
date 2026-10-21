@@ -19,7 +19,7 @@ GLOBAL RULES (MANDATORY)
 6. Refunds and reversals are NEW transactions, never mutations.
 7. Separate intent (Payment) from truth (Ledger).
 8. Ledger is the single source of truth for money.
-9. Blockchain is treated as an external settlement network, never as source of truth.
+9. Payment rails (Pix, card acquirer) are external settlement networks, never the source of truth.
 10. All write operations must be idempotent.
 
 ARCHITECTURE RULES
@@ -33,8 +33,12 @@ BOUNDED CONTEXTS
 This project contains at least these logical contexts:
 1. Ledger (core financial system)
 2. Payment (process orchestration)
-3. Blockchain Adapter (external settlement)
-4. Event Log (business audit, non-financial)
+3. Merchants (API keys, webhook endpoints, fee plans)
+4. Pix and Card (payment methods; Card Vault isolates PAN)
+5. Rails (PixRail / AcquirerRail adapters; simulators only)
+6. Settlement (receivables schedule, payouts)
+7. Webhooks (outbox, signed delivery to merchants)
+8. Event Log (business audit, non-financial)
 
 LEDGER RULES (CRITICAL)
 - Ledger implements double-entry accounting.
@@ -47,47 +51,51 @@ LEDGER RULES (CRITICAL)
 
 LEDGER DOMAIN MODEL
 Entities:
-- Account (id, type: ASSET | LIABILITY | REVENUE, currency)
-- Transaction (id, description, externalReference, createdAt)
+- Account (id, type: ASSET | LIABILITY | REVENUE | EXPENSE, currency)
+- Transaction (id, description, source, externalReference, createdAt)
 - LedgerEntry (id, transactionId, accountId, amount, currency, createdAt)
 
 Invariants:
 - No mixed currencies in a transaction.
 - No unbalanced transaction.
-- Amounts use smallest unit (cents, satoshis).
+- Amounts are integers in the smallest unit (cents). Positive = debit, negative = credit.
 - No side effects in entities.
 
 PAYMENT RULES
 - Payment represents intent and process, not money.
-- Payment has a state machine:
-  CREATED -> PENDING -> SENT -> CONFIRMED
-  FAILED and REVERSED are terminal states.
+- Payment has a state machine (see docs/adr/0001):
+  PENDING -> SUCCEEDED
+  FAILED, EXPIRED and CANCELED are terminal; SUCCEEDED may later become REFUNDED.
 - State transitions are only allowed if ledger operations succeed.
-- Payment NEVER modifies ledger data directly.
+- State change, ledger posting and outbox event commit in ONE database transaction (docs/adr/0002).
+- Payment NEVER modifies ledger data directly; it calls the Ledger use cases.
 
-BLOCKCHAIN RULES
-- Blockchain interaction is asynchronous.
-- Always record intent in ledger BEFORE external execution.
-- Use intermediate accounts:
-  - Pending Settlement
-  - Sent Settlement
-  - External Settlement
-- Blockchain events are reconciled back into the ledger.
-- txHash is a natural idempotency key.
-- Reorgs are handled via compensating transactions, never deletes.
+RAILS RULES (docs/adr/0001)
+- This service is a PSP. Pix (SPI) and card (acquirer) are external rails behind
+  the PixRail and AcquirerRail ports; the only implementations are simulators.
+- Rail interaction is asynchronous. Rail events are reconciled back into the ledger.
+- Pay-ins post to the ledger only when the rail confirms money arrived.
+- Pay-outs (payouts, refunds) record intent in the ledger BEFORE calling the rail,
+  using an in-transit account, and settle or compensate when the rail answers.
+- Pix endToEndId and acquirer authorization id are natural idempotency keys.
+- Rail failures after posting are handled via compensating transactions, never deletes.
+- Card PAN never leaves the Card Vault module and is never logged.
 
 CHART OF ACCOUNTS
-- Client Account (ASSET)
-- Pending Settlement (LIABILITY)
-- Sent Settlement (LIABILITY)
-- External Settlement (LIABILITY)
-- Fees Account (REVENUE)
-- Suspense Account (LIABILITY, optional)
+- pix-settlement (ASSET): money held at the Pix settlement bank
+- acquirer-receivable (ASSET): captured card money the acquirer still owes us
+- bank (ASSET): our operating bank account
+- merchant:{id}:pending (LIABILITY): owed to merchant, not yet available (D+N schedule)
+- merchant:{id}:available (LIABILITY): owed to merchant, available for payout
+- payout-in-transit (LIABILITY): payout sent to the rail, not yet confirmed
+- fee-revenue (REVENUE): MDR and other fees
+- rail-costs (EXPENSE): fees charged to us by the rails
+- suspense (LIABILITY): unmatched money awaiting reconciliation
 
-IDEMPOTENCY
+IDEMPOTENCY (docs/adr/0004)
 - All write APIs require Idempotency-Key.
 - Ledger enforces uniqueness via externalReference + source.
-- Blockchain events are idempotent via txHash.
+- Rail events are idempotent via their natural ids.
 - Retried requests must NEVER create duplicated money.
 
 EVENT LOG
