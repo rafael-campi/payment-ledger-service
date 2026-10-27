@@ -1,11 +1,46 @@
-import { Module } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
+import { APP_FILTER, APP_PIPE } from '@nestjs/core';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { dataSourceOptions } from './database/data-source';
 import { LedgerModule } from './ledger/ledger.module';
+import { MerchantsModule } from './merchants/merchants.module';
+import { PaymentsModule } from './payments/payments.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { SimulatorModule } from './simulator/simulator.module';
+import { VaultModule } from './vault/vault.module';
+import { SettlementModule } from './settlement/settlement.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
+import { DatabaseModule } from './shared/database/database.module';
+import { DomainErrorFilter } from './shared/http/domain-error.filter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 @Module({
-  imports: [LedgerModule],
+  imports: [
+    TypeOrmModule.forRoot(dataSourceOptions),
+    DatabaseModule,
+    LedgerModule,
+    MerchantsModule,
+    WebhooksModule,
+    VaultModule,
+    SettlementModule,
+    PaymentsModule,
+    ReconciliationModule,
+    // the simulated outside world (ADR 0001); development and tests only
+    ...(process.env.SIMULATORS_ENABLED === 'true' ? [SimulatorModule] : []),
+  ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    { provide: APP_FILTER, useClass: DomainErrorFilter },
+  ],
 })
 export class AppModule {}
